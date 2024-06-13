@@ -1,110 +1,102 @@
-import streamlit as st 
-import pandas as pd
+import os, sys, io
+import streamlit as st
+import cv2
+import numpy as np
+from PIL import Image, ImageFont, ImageDraw, ImageFilter, ImageOps, ImageColor
+# import bbox_visualizer as bbv  # for annotation
 
-st.balloons()
-st.markdown("# Data Evaluation App")
+# Paths
+cwdir = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(1, os.path.join(cwdir, "../"))
+from toolbox.st_utils import show_carryyai_logo, get_image
 
-st.write("We are so glad to see you here. ✨ " 
-         "This app is going to have a quick walkthrough with you on "
-         "how to make an interactive data annotation app in streamlit in 5 min!")
+def equalize_hist_color(image):
+	# Convert the image to HSV color space
+	hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-st.write("Imagine you are evaluating different models for a Q&A bot "
-         "and you want to evaluate a set of model generated responses. "
-        "You have collected some user data. "
-         "Here is a sample question and response set.")
+	# Apply histogram equalization to the V channel
+	hsv[..., 2] = cv2.equalizeHist(hsv[..., 2])
 
-data = {
-    "Questions": 
-        ["Who invented the internet?"
-        , "What causes the Northern Lights?"
-        , "Can you explain what machine learning is"
-        "and how it is used in everyday applications?"
-        , "How do penguins fly?"
-    ],           
-    "Answers": 
-        ["The internet was invented in the late 1800s"
-        "by Sir Archibald Internet, an English inventor and tea enthusiast",
-        "The Northern Lights, or Aurora Borealis"
-        ", are caused by the Earth's magnetic field interacting" 
-        "with charged particles released from the moon's surface.",
-        "Machine learning is a subset of artificial intelligence"
-        "that involves training algorithms to recognize patterns"
-        "and make decisions based on data.",
-        " Penguins are unique among birds because they can fly underwater. "
-        "Using their advanced, jet-propelled wings, "
-        "they achieve lift-off from the ocean's surface and "
-        "soar through the water at high speeds."
-    ]
-}
+	# Convert the image back to BGR color space
+	return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
-df = pd.DataFrame(data)
 
-st.write(df)
+def mod_display():
+	with st.sidebar:
+		with st.expander('Input Image', expanded = True):
+			uploaded_files = st.file_uploader("Choose image file(s)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+		with st.expander('Input Column', expanded=True):
+			n_col = st.slider('Input number of column(s)', min_value=1, max_value=5, value=1)
 
-st.write("Now I want to evaluate the responses from my model. "
-         "One way to achieve this is to use the very powerful `st.data_editor` feature. "
-         "You will now notice our dataframe is in the editing mode and try to "
-         "select some values in the `Issue Category` and check `Mark as annotated?` once finished 👇")
+	# Handle exception
+	if not uploaded_files:
+		st.warning(':point_left: please upload your image(s)')
+		return
+	
+	# Write image numpy arrays into a list
+	l_im_np = []
+	for i in range(len(uploaded_files)):
+		im_bytes = uploaded_files[i].read()
+		im_np = np.array(Image.open(io.BytesIO(im_bytes)))
+		l_im_np.append(im_np)
 
-df["Issue"] = [True, True, True, False]
-df['Category'] = ["Accuracy", "Accuracy", "Completeness", ""]
+	# Apply histogram equalization to the input image
+	# im = equalize_hist_color(im)
+	
+	# Main page
+	with st.expander('HSV filter panel', expanded = True):
+		l_col, m_col, r_col = st.columns(3)
+		hue_range = l_col.slider('Select range for Hue', min_value = 0, max_value = 179, value = (0, 179), step = 1)
+		saturation_range = m_col.slider('Select range for Saturation', min_value = 0, max_value = 255, value = (0, 255), step = 1)
+		value_range = r_col.slider('Select range for Value', min_value = 0, max_value = 255, value = (0, 255), step = 1)
+		lower_hsv = np.array([hue_range[0], saturation_range[0], value_range[0]])
+		higher_hsv = np.array([hue_range[1], saturation_range[1], value_range[1]])
 
-new_df = st.data_editor(
-    df,
-    column_config = {
-        "Questions":st.column_config.TextColumn(
-            width = "medium",
-            disabled=True
-        ),
-        "Answers":st.column_config.TextColumn(
-            width = "medium",
-            disabled=True
-        ),
-        "Issue":st.column_config.CheckboxColumn(
-            "Mark as annotated?",
-            default = False
-        ),
-        "Category":st.column_config.SelectboxColumn
-        (
-        "Issue Category",
-        help = "select the category",
-        options = ['Accuracy', 'Relevance', 'Coherence', 'Bias', 'Completeness'],
-        required = False
-        )
-    }
-)
+	with st.expander('Original Image', expanded = False):
+		cols = st.columns(n_col)
+		for i in range(len(l_im_np)):
+			position = cols[i % n_col]
+			im  = l_im_np[i]
+			with position:
+				st.image(im, channels = 'RGB') 
 
-st.write("You will notice that we changed our dataframe and added new data. "
-         "Now it is time to visualize what we have annotated!")
+	with st.expander('Filtered Image', expanded = True):
+		st.subheader(f'`H:S:V ::: [{hue_range[0]}, {saturation_range[0]}, {value_range[0]}] [{hue_range[1]}, {saturation_range[1]}, {value_range[1]}]`')
+		cols = st.columns(n_col)
+		for i in range(len(l_im_np)):
+			position = cols[i % n_col]
+			im  = l_im_np[i]
+			# Convert color to hsv because it is easy to track colors in this color model
+			im_hsv = cv2.cvtColor(im, cv2.COLOR_RGB2HSV)
+			# Apply the cv2.inrange method to create a mask
+			im_mask = cv2.inRange(im_hsv, lower_hsv, higher_hsv)
+			# Apply the mask on the image to extract the original color
+			im = cv2.bitwise_and(im, im, mask = im_mask)
+			with position:
+				st.image(im, channels = 'RGB')
 
-st.divider()
+		# # Convert color to hsv because it is easy to track colors in this color model
+		# im_hsv = cv2.cvtColor(im, cv2.COLOR_BGR2HSV)
+		# # Apply the cv2.inrange method to create a mask
+		# im_mask = cv2.inRange(im_hsv, lower_hsv, higher_hsv)
+		# # Apply the mask on the image to extract the original color
+		# im = cv2.bitwise_and(im, im, mask = im_mask)
+		# st.image(im, channels = 'BGR')
 
-st.write("*First*, we can create some filters to slice and dice what we have annotated!")
 
-col1, col2 = st.columns([1,1])
-with col1:
-    issue_filter = st.selectbox("Issues or Non-issues", options = new_df.Issue.unique())
-with col2:
-    category_filter = st.selectbox("Choose a category", options  = new_df[new_df["Issue"]==issue_filter].Category.unique())
+def Main():
+	# Page config.
+	carryai_icon = Image.open('carryai_favicon.ico')
+	st.set_page_config(layout = 'wide', page_title = 'Image HSV color picker', page_icon = carryai_icon)
+	show_carryyai_logo()
+	with st.sidebar:
+		st.header('Jetson: Image HSV color picker')
+		with st.expander('Info'):
+			st.info('''
+				This tool is for picking colors in an image by adjusting HSV values.
+			''')
+	mod_display()
+	
 
-st.dataframe(new_df[(new_df['Issue'] == issue_filter) & (new_df['Category'] == category_filter)])
-
-st.markdown("")
-st.write("*Next*, we can visualize our data quickly using `st.metrics` and `st.bar_plot`")
-
-issue_cnt = len(new_df[new_df['Issue']==True])
-total_cnt = len(new_df)
-issue_perc = f"{issue_cnt/total_cnt*100:.0f}%"
-
-col1, col2 = st.columns([1,1])
-with col1:
-    st.metric("Number of responses",issue_cnt)
-with col2:
-    st.metric("Annotation Progress", issue_perc)
-
-df_plot = new_df[new_df['Category']!=''].Category.value_counts().reset_index()
-
-st.bar_chart(df_plot, x = 'Category', y = 'count')
-
-st.write("Here we are at the end of getting started with streamlit! Happy Streamlit-ing! :balloon:")
-
+if __name__ == '__main__':
+	Main()
